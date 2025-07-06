@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  webrtc-demo:
+    build: .
+    container_name: webrtc-demo
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped

@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>WebRTC Stream/Viewer</title>
+    <style>
+        video { width:300px; height:200px; background:#ddd; margin:5px; }
+        .debug { font-family: monospace; font-size: 12px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+<h1>Chọn vai trò</h1>
+<select id="role">
+    <option value="streamer">Streamer</option>
+    <option value="viewer">Viewer</option>
+</select>
+<button id="startBtn">Bắt đầu</button>
+
+<div><h3>Local video</h3><video id="localVideo" autoplay playsinline muted></video></div>
+<div><h3>Remote video</h3><video id="remoteVideo" autoplay playsinline controls></video></div>
+
+<div class="debug">
+    <div>Connection State: <span id="connState">-</span></div>
+    <div>ICE State: <span id="iceState">-</span></div>
+    <div>Remote Tracks: <span id="trackCount">0</span></div>
+</div>
+
+<script>
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const connState = document.getElementById('connState');
+    const iceState = document.getElementById('iceState');
+    const trackCount = document.getElementById('trackCount');
+
+    // Debug video events
+    remoteVideo.addEventListener('loadstart', () => console.log("📺 Video: loadstart"));
+    remoteVideo.addEventListener('loadedmetadata', () => console.log("📺 Video: loadedmetadata", remoteVideo.videoWidth + "x" + remoteVideo.videoHeight));
+    remoteVideo.addEventListener('loadeddata', () => console.log("📺 Video: loadeddata"));
+    remoteVideo.addEventListener('canplay', () => console.log("📺 Video: canplay"));
+    remoteVideo.addEventListener('playing', () => console.log("📺 Video: playing"));
+    remoteVideo.addEventListener('error', (e) => console.error("📺 Video error:", e));
+
+    let role, pc, ws, localStream;
+    let isRemoteSet = false;
+    const candidateQueue = [];
+
+    document.getElementById('startBtn').onclick = () => {
+        role = document.getElementById('role').value;
+        console.log("Vai trò:", role);
+        start();
+    };
+
+    function updateDebugInfo() {
+        if (pc) {
+            connState.textContent = pc.connectionState;
+            iceState.textContent = pc.iceConnectionState;
+
+            if (remoteVideo.srcObject) {
+                const tracks = remoteVideo.srcObject.getTracks();
+                trackCount.textContent = tracks.length;
+
+                // Log chi tiết về video element
+                console.log("📡 Debug Info:");
+                console.log("  - Connection:", pc.connectionState);
+                console.log("  - ICE:", pc.iceConnectionState);
+                console.log("  - srcObject:", !!remoteVideo.srcObject);
+                console.log("  - tracks:", tracks.map(t => `${t.kind}:${t.readyState}`));
+                console.log("  - videoWidth:", remoteVideo.videoWidth);
+                console.log("  - videoHeight:", remoteVideo.videoHeight);
+                console.log("  - readyState:", remoteVideo.readyState);
+                console.log("  - paused:", remoteVideo.paused);
+
+                // Force play nếu bị pause
+                if (remoteVideo.paused && remoteVideo.readyState >= 2) {
+                    console.log("📺 Attempting to play video...");
+                    remoteVideo.play().catch(e => console.error("Play failed:", e));
+                }
+            }
+        }
+    }
+
+    function start() {
+        ws = new WebSocket('wss://192.168.0.101:8443/socket');
+        pc = new RTCPeerConnection({
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        });
+
+        // Debug connection states
+        pc.onconnectionstatechange = () => {
+            console.log("📡 Connection state:", pc.connectionState);
+            updateDebugInfo();
+        };
+
+        pc.oniceconnectionstatechange = () => {
+            console.log("📡 ICE connection state:", pc.iceConnectionState);
+            updateDebugInfo();
+        };
+
+        // ICE candidate handling
+        pc.onicecandidate = e => {
+            if (e.candidate) {
+                console.log("📡 Sending ICE candidate:", e.candidate);
+                send({ event: 'candidate', data: e.candidate });
+            } else {
+                console.log("📡 ICE gathering complete");
+            }
+        };
+
+        // FIX: Xử lý remote tracks đúng cách - không ghi đè srcObject
+        let remoteStream = null;
+
+        pc.ontrack = e => {
+            console.log("📡 Remote track event:", e.track.kind, "ID:", e.track.id);
+
+            // Tạo hoặc sử dụng remoteStream hiện tại
+            if (!remoteStream) {
+                if (e.streams && e.streams[0]) {
+                    remoteStream = e.streams[0];
+                    console.log("📡 Using stream from event");
+                } else {
+                    remoteStream = new MediaStream();
+                    console.log("📡 Created new MediaStream");
+                }
+                remoteVideo.srcObject = remoteStream;
+            }
+
+            // Nếu không có stream trong event, thêm track thủ công
+            if (!e.streams || !e.streams[0]) {
+                // Kiểm tra track đã tồn tại chưa
+                const existingTrack = remoteStream.getTracks()
+                    .find(t => t.kind === e.track.kind);
+
+                if (!existingTrack) {
+                    console.log("📡 Adding track to stream:", e.track.kind);
+                    remoteStream.addTrack(e.track);
+                } else {
+                    console.log("📡 Replacing existing track:", e.track.kind);
+                    remoteStream.removeTrack(existingTrack);
+                    remoteStream.addTrack(e.track);
+                }
+            }
+
+            // Log thông tin stream
+            console.log("📡 Current stream tracks:", remoteStream.getTracks().map(t => t.kind));
+            updateDebugInfo();
+        };
+
+        ws.onopen = () => {
+            console.log("📡 WebSocket connected");
+            send({ event: 'join', data: role });
+
+            if (role === 'streamer') {
+                navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480 },
+                    audio: true
+                })
+                    .then(stream => {
+                        localStream = stream;
+                        localVideo.srcObject = stream;
+
+                        // Thêm tracks vào peer connection
+                        stream.getTracks().forEach(track => {
+                            console.log("📡 Adding local track:", track.kind);
+                            pc.addTrack(track, stream);
+                        });
+
+                        return pc.createOffer();
+                    })
+                    .then(offer => {
+                        console.log("📡 Created offer");
+                        return pc.setLocalDescription(offer);
+                    })
+                    .then(() => {
+                        console.log("📡 Local description set, sending offer");
+                        send({ event: 'offer', data: pc.localDescription });
+                    })
+                    .catch(err => {
+                        console.error("❌ Streamer setup error:", err);
+                    });
+            }
+        };
+
+        ws.onmessage = msg => {
+            const m = JSON.parse(msg.data);
+            console.log('📨 Message received:', m.event, m.data ? '(with data)' : '(no data)');
+
+            switch (m.event) {
+                case 'offer':
+                    if (role === 'viewer') handleOffer(m.data);
+                    break;
+                case 'answer':
+                    if (role === 'streamer') handleAnswer(m.data);
+                    break;
+                case 'candidate':
+                    console.log('🧊 Received ICE candidate for role:', role);
+                    handleCandidate(m.data);
+                    break;
+            }
+        };
+
+        ws.onerror = err => console.error("❌ WebSocket error:", err);
+        ws.onclose = () => console.log("📡 WebSocket closed");
+    }
+
+    function handleOffer(offer) {
+        console.log("📡 Handling offer");
+        const desc = (typeof offer === 'string') ? JSON.parse(offer) : offer;
+
+        pc.setRemoteDescription(new RTCSessionDescription(desc))
+            .then(() => {
+                console.log("📡 Remote description set");
+                isRemoteSet = true;
+
+                // Xử lý candidates trong queue
+                console.log("📡 Processing", candidateQueue.length, "queued candidates");
+                candidateQueue.forEach(cand => {
+                    pc.addIceCandidate(cand)
+                        .then(() => console.log("📡 Queued candidate added"))
+                        .catch(err => console.error("❌ Queued candidate error:", err));
+                });
+                candidateQueue.length = 0;
+
+                return pc.createAnswer();
+            })
+            .then(answer => {
+                console.log("📡 Created answer");
+                return pc.setLocalDescription(answer);
+            })
+            .then(() => {
+                console.log("📡 Local description (answer) set, sending");
+                send({ event: 'answer', data: pc.localDescription });
+
+                // Kiểm tra connection state sau 3 giây
+                setTimeout(() => {
+                    console.log("📡 Connection check after 3s:");
+                    updateDebugInfo();
+
+                    if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+                        console.log("❌ ICE connection failed - possible firewall/NAT issue");
+                    }
+                }, 3000);
+            })
+            .catch(err => console.error("❌ handleOffer error:", err));
+    }
+
+    function handleAnswer(answer) {
+        console.log("📡 Handling answer");
+        pc.setRemoteDescription(new RTCSessionDescription(answer))
+            .then(() => {
+                console.log("📡 Answer set as remote description");
+                isRemoteSet = true;
+            })
+            .catch(err => console.error("❌ handleAnswer error:", err));
+    }
+
+    function handleCandidate(candidate) {
+        console.log("📡 Handling ICE candidate:", candidate.candidate?.substring(0, 50) + "...");
+        const ice = new RTCIceCandidate(candidate);
+
+        if (isRemoteSet && pc.remoteDescription) {
+            pc.addIceCandidate(ice)
+                .then(() => {
+                    console.log("📡 ICE candidate added successfully");
+                    // Update debug info sau khi thêm candidate
+                    setTimeout(updateDebugInfo, 100);
+                })
+                .catch(err => console.error("❌ ICE candidate error:", err));
+        } else {
+            console.log("📡 Candidate queued (remote not ready)");
+            candidateQueue.push(ice);
+        }
+    }
+
+    function send(message) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ ...message, role }));
+        } else {
+            console.error("❌ WebSocket not ready");
+        }
+    }
+
+    // Cleanup khi đóng trang
+    window.addEventListener('beforeunload', () => {
+        if (localStream) {
+            localStream.getTracks().forEach(track => track.stop());
+        }
+        if (pc) pc.close();
+        if (ws) ws.close();
+    });
+</script>
+</body>
+</html>
