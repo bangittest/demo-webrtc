@@ -53,7 +53,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/sandtable-api
+          images: bangnl123/sandtable-api
           tags: |
             type=ref,event=branch
             type=ref,event=pr
