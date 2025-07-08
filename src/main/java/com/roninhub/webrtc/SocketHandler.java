@@ -45,16 +45,28 @@ public class SocketHandler  implements WebSocketHandler {
                 case "candidate":
                     handleCandidate(session, data, role);
                     break;
+                case "request_offer":
+                    for (WebSocketSession streamer : streamers.values()) {
+                        if (streamer.isOpen()) {
+                            // Gửi 1 message yêu cầu streamer tạo offer gửi lại
+                            streamer.sendMessage(new TextMessage(
+                                    objectMapper.writeValueAsString(Map.of(
+                                            "event", "viewer_request",
+                                            "data", Map.of("viewerId", session.getId())
+                                    ))
+                            ));
+                        }
+                    }
+                    break;
                 default:
                     System.out.println("❌ Unknown event: " + event);
             }
         } catch (Exception e) {
             System.err.println("❌ Error handling message: " + e.getMessage());
-            e.printStackTrace();
         }
     }
 
-    private void handleJoin(WebSocketSession session, String role) {
+    private void handleJoin(WebSocketSession session, String role) throws IOException {
         System.out.println("👤 User joined as: " + role);
 
         if ("streamer".equals(role)) {
@@ -63,26 +75,43 @@ public class SocketHandler  implements WebSocketHandler {
         } else if ("viewer".equals(role)) {
             viewers.put(session.getId(), session);
             System.out.println("👁️ Viewer connected. Total viewers: " + viewers.size());
-        }
-    }
 
-    private void handleOffer(WebSocketSession session, JsonNode offer) throws IOException {
-        System.out.println("📤 Relaying offer from streamer to " + viewers.size() + " viewers");
-
-        String message = createMessage("offer", offer);
-
-        // Gửi offer tới tất cả viewers
-        for (WebSocketSession viewer : viewers.values()) {
-            if (viewer.isOpen()) {
-                try {
-                    viewer.sendMessage(new TextMessage(message));
-                    System.out.println("✅ Offer sent to viewer: " + viewer.getId());
-                } catch (Exception e) {
-                    System.err.println("❌ Failed to send offer to viewer: " + e.getMessage());
+            // YÊU CẦU STREAMER PHÁT OFFER
+            for (WebSocketSession streamer : streamers.values()) {
+                if (streamer.isOpen()) {
+                    Map<String, Object> req = new HashMap<>();
+                    req.put("event", "request-offer");
+                    req.put("viewerId", session.getId()); // Optionally identify viewer
+                    String message = objectMapper.writeValueAsString(req);
+                    streamer.sendMessage(new TextMessage(message));
+                    System.out.println("📤 Sent request-offer to streamer: " + streamer.getId());
                 }
             }
         }
     }
+
+    private void handleOffer(WebSocketSession session, JsonNode offer) throws IOException {
+        System.out.println("📤 Relaying offer from streamer");
+
+        String message = createMessage("offer", offer);
+
+        if (offer.has("targetViewer")) {
+            String viewerId = offer.get("targetViewer").asText();
+            WebSocketSession viewer = viewers.get(viewerId);
+            if (viewer != null && viewer.isOpen()) {
+                viewer.sendMessage(new TextMessage(message));
+                System.out.println("✅ Offer sent to viewer: " + viewerId);
+            }
+        } else {
+            for (WebSocketSession viewer : viewers.values()) {
+                if (viewer.isOpen()) {
+                    viewer.sendMessage(new TextMessage(message));
+                    System.out.println("✅ Offer sent to viewer: " + viewer.getId());
+                }
+            }
+        }
+    }
+
 
     private void handleAnswer(WebSocketSession session, JsonNode answer) throws IOException {
         System.out.println("📤 Relaying answer from viewer to streamers");
