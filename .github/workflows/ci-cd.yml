@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: webrtc-demo
+  IMAGE_NAME: bangnl123/sandtable-api
 
 jobs:
   build:
