@@ -25,7 +25,7 @@ WORKDIR /deployments
 COPY --from=build /usr/app/build/ /deployments/build/
 #COPY --from=build /usr/app/build/libs/qlx-create-trip-0.0.1-SNAPSHOT.jar /deployments/
 
-EXPOSE 8443
+EXPOSE 8989
 USER 1001
 
 ENTRYPOINT exec java $JAVA_OPTIONS -jar /deployments/build/libs/webrtc-0.0.1-SNAPSHOT.jar
