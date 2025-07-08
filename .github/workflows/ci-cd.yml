@@ -43,7 +43,6 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
-          shell: powershell
           script: |
             docker pull bangnl123/springboot-images-new:latest
             cd "D:\room\webrtc-demo"
