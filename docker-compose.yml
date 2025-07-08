@@ -1,11 +1,15 @@
-version: '3.8'
-
 services:
-  webrtc-demo:
-    build: .
-    container_name: webrtc-demo
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - SPRING_PROFILE=dev
+    image: webrtc-demo:latest
     ports:
-      - "8443:8443"
+      - "8989:8989"
+    environment:
+      - SPRING_PROFILES_ACTIVE=dev
     volumes:
-      - ./logs:/app/logs
+      - ./src/main/resources:/deployments/resources/main
     restart: unless-stopped
