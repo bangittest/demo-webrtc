@@ -4,6 +4,7 @@ FROM eclipse-temurin:21-jdk as builder
 WORKDIR /app
 COPY . .
 
+RUN chmod +x gradlew
 RUN ./gradlew clean bootJar -x test
 
 # Runtime stage
